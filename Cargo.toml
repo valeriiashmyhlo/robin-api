@@ -10,3 +10,22 @@ futures = "0.3.30"
 tokio-tungstenite = "0.21.0"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing = "0.1.40"
+sqlx = { version = "0.7.3", features = [
+    "runtime-async-std-native-tls",
+    "postgres",
+    "chrono",
+    "uuid",
+] }
+dotenv = "0.15.0"
+refinery = { version = "0.8.12", features = ["postgres"] }
+serde = { version = "1.0.196", features = ["derive"] }
+uuid = { version = "1.7.0", features = ["serde"] }
+chrono = { version = "0.4.34", features = ["serde"] }
+
+[[bin]]
+name = "migrate"
+path = "src/migrate.rs"
+
+[[bin]]
+name = "app"
+path = "src/main.rs"

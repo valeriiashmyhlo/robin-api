@@ -1,5 +1,6 @@
 use std::{
     collections::HashSet,
+    env,
     sync::{Arc, Mutex},
 };
 
@@ -12,9 +13,14 @@ use axum::{
     routing::get,
     serve, Router,
 };
+use dotenv::dotenv;
 use futures::{sink::SinkExt, stream::StreamExt};
+use sqlx::{Pool, Postgres};
 use tokio::{net::TcpListener, sync::broadcast};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+mod db;
+mod model;
 
 #[derive(Eq, Hash, PartialEq)]
 struct User {
@@ -25,10 +31,15 @@ struct User {
 struct AppState {
     user_set: Mutex<HashSet<String>>,
     tx: broadcast::Sender<String>,
+    db: Pool<Postgres>,
 }
 
 #[tokio::main]
 async fn main() {
+    dotenv().ok();
+
+    let pool = db::connect_db().await;
+
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -38,8 +49,9 @@ async fn main() {
         .init();
     let user_set = Mutex::new(HashSet::<String>::new());
     let (tx, _rx) = broadcast::channel(100);
+    let db = pool.clone();
 
-    let app_state = Arc::new(AppState { user_set, tx });
+    let app_state = Arc::new(AppState { user_set, tx, db });
 
     let app = Router::new()
         .route("/", get(index))
