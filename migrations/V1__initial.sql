@@ -1,4 +1,6 @@
 CREATE TABLE users (
-    id int,
-    first_name varchar(255)
+    id serial PRIMARY KEY,
+    first_name varchar(255) not null,
+    token uuid not null,
+    password varchar(255) not null
 );

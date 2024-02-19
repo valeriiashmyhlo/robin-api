@@ -1,28 +1,29 @@
-use std::{
-    collections::HashSet,
-    env,
-    sync::{Arc, Mutex},
-};
-
+use axum::http::StatusCode;
 use axum::{
+    debug_handler,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         State,
     },
-    response::{Html, IntoResponse},
-    routing::get,
-    serve, Router,
+    response::IntoResponse,
+    routing::{get, post},
+    serve, Json, Router,
 };
 use dotenv::dotenv;
 use futures::{sink::SinkExt, stream::StreamExt};
+use serde::{Deserialize, Serialize};
 use sqlx::{Pool, Postgres};
+use std::{
+    collections::HashSet,
+    sync::{Arc, Mutex},
+};
 use tokio::{net::TcpListener, sync::broadcast};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod db;
 mod model;
 
-#[derive(Eq, Hash, PartialEq)]
+#[derive(Eq, Hash, PartialEq, Serialize)]
 struct User {
     id: u64,
     first_name: String,
@@ -54,13 +55,33 @@ async fn main() {
     let app_state = Arc::new(AppState { user_set, tx, db });
 
     let app = Router::new()
-        .route("/", get(index))
+        .route("/login", post(login))
         .route("/websocket", get(websocket_handler))
         .with_state(app_state);
 
     let listener = TcpListener::bind("127.0.0.1:3000").await.unwrap();
     tracing::debug!("listening on {}", listener.local_addr().unwrap());
     serve(listener, app).await.unwrap();
+}
+
+#[derive(Deserialize)]
+pub struct Login {
+    pub password: String,
+}
+
+#[debug_handler]
+async fn login(
+    State(state): State<Arc<AppState>>,
+    Json(props): Json<Login>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let result = model::User::get(&state.db, props)
+        .await
+        .map_err(|e| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(User {
+        id: result.id as u64,
+        first_name: result.first_name,
+    }))
 }
 
 async fn websocket_handler(
@@ -136,6 +157,6 @@ fn check_username(state: &AppState, string: &mut String, name: &str) {
 }
 
 // TODO: Remove below fn
-async fn index() -> Html<&'static str> {
-    Html(std::include_str!("../chat.html"))
-}
+// async fn index() -> Html<&'static str> {
+//     Html(std::include_str!("../chat.html"))
+// }

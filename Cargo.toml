@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1.36.0", features = ["full"] }
-axum = { version = "0.7.4", features = ["ws"] }
+axum = { version = "0.7.4", features = ["ws", "macros"] }
 futures = "0.3.30"
 tokio-tungstenite = "0.21.0"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -21,6 +21,7 @@ refinery = { version = "0.8.12", features = ["postgres"] }
 serde = { version = "1.0.196", features = ["derive"] }
 uuid = { version = "1.7.0", features = ["serde"] }
 chrono = { version = "0.4.34", features = ["serde"] }
+anyhow = "1.0.79"
 
 [[bin]]
 name = "migrate"
