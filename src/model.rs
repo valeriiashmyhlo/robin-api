@@ -27,8 +27,9 @@ impl User {
     pub async fn get(pool: &PgPool, login: Login) -> PostgresResult<User> {
         let user = sqlx::query_as!(
             User,
-            "SELECT * from users WHERE password = $1",
-            login.password
+            "SELECT * from users WHERE password = $1 AND first_name = $2",
+            login.password,
+            login.first_name
         )
         .fetch_one(pool)
         .await?;
