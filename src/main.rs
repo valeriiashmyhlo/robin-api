@@ -2,7 +2,7 @@ use axum::{
     debug_handler,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        State,
+        Request, State,
     },
     response::IntoResponse,
     routing::{get, post},
@@ -11,7 +11,7 @@ use axum::{
 use dotenv::dotenv;
 use futures::{sink::SinkExt, stream::StreamExt};
 use serde::{Deserialize, Serialize};
-use serde_json::from_str;
+use serde_json::{from_str, to_string};
 use sqlx::{Pool, Postgres};
 use std::{
     collections::HashSet,
@@ -23,7 +23,7 @@ use tracing::log::{set_max_level, LevelFilter};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
-use crate::app_error::AppError;
+use crate::{app_error::AppError, model::ModelUser};
 
 mod app_error;
 mod db;
@@ -36,16 +36,24 @@ struct User {
     token: Uuid,
 }
 
-#[derive(Deserialize)]
-struct UserMessage {
-    first_name: String,
-    token: Uuid,
-    content: Option<String>,
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "type")]
+enum RequestMessage {
+    Join { token: Uuid },
+    Message { content: String },
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(tag = "type")]
+enum ResponseMessage {
+    Join { first_name: String },
+    Leave { first_name: String },
+    Message { first_name: String, content: String },
 }
 
 struct AppState {
-    user_set: Mutex<HashSet<String>>,
-    tx: broadcast::Sender<String>,
+    // user_set: Mutex<HashSet<ModelUser>>,
+    tx: broadcast::Sender<ResponseMessage>,
     db: Pool<Postgres>,
 }
 
@@ -54,21 +62,20 @@ async fn main() {
     dotenv().ok();
 
     let pool = db::connect_db().await;
-
     set_max_level(LevelFilter::Debug);
+
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "app,sqlx,info,axum::rejection=trace".into());
     tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "app,sqlx,info,axum::rejection=trace".into()),
-        )
+        .with(env_filter)
         .with(tracing_subscriber::fmt::layer().compact().pretty())
         .init();
 
-    let user_set = Mutex::new(HashSet::<String>::new());
+    // let user_set = Mutex::new(HashSet::<ModelUser>::new());
     let (tx, _rx) = broadcast::channel(100);
     let db = pool.clone();
 
-    let app_state = Arc::new(AppState { user_set, tx, db });
+    let app_state = Arc::new(AppState { tx, db });
 
     let app = Router::new()
         .route("/login", post(login))
@@ -92,7 +99,7 @@ async fn login(
     State(state): State<Arc<AppState>>,
     Json(props): Json<Login>,
 ) -> Result<impl IntoResponse, AppError> {
-    let result = model::User::get(&state.db, props).await?;
+    let result = ModelUser::get(&state.db, props).await?;
 
     Ok(Json(User {
         id: result.id as u64,
@@ -113,46 +120,48 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
 
     let mut rx = state.tx.subscribe();
 
-    // read username and send to all subscribers;
     let Some(Ok(Message::Text(text))) = receiver.next().await else {
-        panic!("Username not provided");
+        panic!("Invalid message");
     };
-    let message: UserMessage = match async { from_str(&text) }.await {
-        Ok(result) => result,
-        Err(err) => {
-            panic!("Error parsing message: {}", err);
+
+    let token = match async { from_str(&text) }.await {
+        Ok(RequestMessage::Join { token }) => token,
+        _ => {
+            panic!("Invalid message2");
         }
     };
-    let username = message.first_name;
+
+    let user = ModelUser::get_by_token(&state.db, token).await.unwrap();
+    let _ = state.tx.send(ResponseMessage::Join {
+        first_name: user.first_name.clone(),
+    });
 
     let mut send_task = tokio::spawn(async move {
-        while let Ok(msg) = rx.recv().await {
-            if sender.send(Message::Text(msg)).await.is_err() {
+        while let msg = rx.recv().await {
+            if sender
+                .send(Message::Text(to_string(&msg.unwrap()).unwrap()))
+                .await
+                .is_err()
+            {
                 break;
             }
         }
     });
 
     let tx_clone = state.tx.clone();
+    let first_name = user.first_name.clone();
     let mut recv_task = tokio::spawn(async move {
         while let Some(Ok(Message::Text(text))) = receiver.next().await {
-            async {
-                let message: UserMessage = from_str(&text)?;
-                let first_name = message.first_name;
-                let content = match message.content {
-                    Some(content) => content,
-                    None => {
-                        let msg = format!("{first_name} joined.");
-                        tracing::debug!("{msg}");
-                        tx_clone.send(msg);
-                        return Ok::<(), AppError>(());
-                    }
-                };
-
-                tx_clone.send(format!("{first_name}: {content}"));
-                Ok(())
+            if let Ok(RequestMessage::Message { content }) = from_str(&text) {
+                tx_clone
+                    .send(ResponseMessage::Message {
+                        first_name: first_name.clone(),
+                        content,
+                    })
+                    .unwrap();
+            } else {
+                break;
             }
-            .await;
         }
     });
 
@@ -161,9 +170,16 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
         _ = (&mut recv_task) => send_task.abort(),
     };
 
-    let msg = format!("{username} left.");
-    tracing::debug!("{msg}");
-    state.tx.send(msg);
+    // let msg = format!("{first_name_clone} left.");
+    // tracing::debug!("{msg}");
+    let _ = state.tx.send(ResponseMessage::Leave {
+        first_name: user.first_name.clone(),
+    });
 
-    state.user_set.lock().unwrap().remove(&username);
+    // state.user_set.lock().unwrap().remove(&user);
 }
+
+// 1. Add a history of messages after joined
+// 2. Add a list of connected users
+// 3. Refactor
+// 4. Add useReducer to handle messages from back

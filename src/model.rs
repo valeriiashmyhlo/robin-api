@@ -8,10 +8,9 @@ use uuid::Uuid;
 
 type PostgresResult<T> = Result<T>;
 
-#[derive(Debug, FromRow, Deserialize, Serialize)]
+#[derive(Debug, FromRow, Deserialize, Serialize, Eq, PartialEq)]
 #[allow(non_snake_case)]
-
-pub struct User {
+pub struct ModelUser {
     //TODO: Id as uuid
     pub id: i32,
     pub first_name: String,
@@ -23,16 +22,24 @@ pub struct User {
     // pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-impl User {
-    pub async fn get(pool: &PgPool, login: Login) -> PostgresResult<User> {
+impl ModelUser {
+    pub async fn get(pool: &PgPool, login: Login) -> PostgresResult<ModelUser> {
         let user = sqlx::query_as!(
-            User,
+            ModelUser,
             "SELECT * from users WHERE password = $1 AND first_name = $2",
             login.password,
             login.first_name
         )
         .fetch_one(pool)
         .await?;
+
+        Ok(user)
+    }
+
+    pub async fn get_by_token(pool: &PgPool, token: Uuid) -> PostgresResult<ModelUser> {
+        let user = sqlx::query_as!(ModelUser, "SELECT * from users WHERE token = $1", token,)
+            .fetch_one(pool)
+            .await?;
 
         Ok(user)
     }
