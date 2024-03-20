@@ -17,7 +17,7 @@ use std::sync::Arc;
 use tokio::{net::TcpListener, sync::broadcast};
 use tower_http::cors::CorsLayer;
 use tracing::log::{set_max_level, LevelFilter};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{fmt::format, layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
 use crate::{
@@ -158,21 +158,22 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
         }
     };
     let user = ModelUser::get_by_token(&state.db, token).await.unwrap();
-    let chat_id = ModelChat::get_id().unwrap();
-    let connected_users = ModelUser::get_users_in_chat(&state.db, chat_id)
-        .await
-        .unwrap()
-        .into_iter()
-        .map(User::from_model_user)
-        .collect::<Vec<User>>();
-
+    let msg = format!("{} joined", user.username);
+    tracing::debug!("{msg}");
     // Send message to all users that a new user has joined
     let _ = state.tx.send(ResponseMessage::Join {
         user_id: user.id,
         username: user.username.clone(),
     });
 
+    let chat_id = ModelChat::get_id().unwrap();
     ModelChatUser::new(&state.db, chat_id, user.id).await;
+    let connected_users = ModelUser::get_users_in_chat(&state.db, chat_id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(User::from_model_user)
+        .collect::<Vec<User>>();
 
     // Send a history of a chat to a newly joined user
     let chat_history = ModelMessage::get_chat_history(&state.db, chat_id)
@@ -230,7 +231,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
         _ = (&mut recv_task) => send_task.abort(),
     };
 
-    ModelUser::remove_user_from_chat(&state.db, user.id).await;
+    // ModelUser::remove_user_from_chat(&state.db, user.id).await;
 
     // tracing::debug!("{msg}");
     let _ = state.tx.send(ResponseMessage::Leave {
