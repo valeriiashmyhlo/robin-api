@@ -17,7 +17,7 @@ use std::sync::Arc;
 use tokio::{net::TcpListener, sync::broadcast};
 use tower_http::cors::CorsLayer;
 use tracing::log::{set_max_level, LevelFilter};
-use tracing_subscriber::{fmt::format, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
 use crate::{
@@ -81,7 +81,7 @@ enum ResponseMessage {
 
 pub struct AppState {
     // user_set: Arc<Mutex<HashSet<User>>>,
-    tx: broadcast::Sender<ResponseMessage>,
+    broadcast_sender: broadcast::Sender<ResponseMessage>,
     db: Pool<Postgres>,
 }
 
@@ -100,10 +100,13 @@ async fn main() {
         .init();
 
     // let user_set = Arc::new(Mutex::new(HashSet::<User>::new()));
-    let (tx, _rx) = broadcast::channel(100);
+    let (broadcast_sender, _broadcast_receiver) = broadcast::channel(100);
     let db = pool.clone();
 
-    let app_state = Arc::new(AppState { tx, db });
+    let app_state = Arc::new(AppState {
+        broadcast_sender,
+        db,
+    });
 
     let app = Router::new()
         .route("/login", post(login))
@@ -143,12 +146,14 @@ async fn websocket_handler(
     ws.on_upgrade(|socket| websocket(socket, state))
 }
 
-async fn websocket(stream: WebSocket, state: Arc<AppState>) {
-    let (mut sender, mut receiver) = stream.split();
+async fn websocket(ws: WebSocket, state: Arc<AppState>) {
+    // Client specific channel
+    let (mut ws_sender, mut ws_receiver) = ws.split();
 
-    let mut rx = state.tx.subscribe();
+    // Broadcast channel
+    let mut broadcast_receiver = state.broadcast_sender.subscribe();
 
-    let Some(Ok(Message::Text(text))) = receiver.next().await else {
+    let Some(Ok(Message::Text(text))) = ws_receiver.next().await else {
         panic!("Invalid message");
     };
     let token = match async { from_str(&text) }.await {
@@ -158,16 +163,17 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
         }
     };
     let user = ModelUser::get_by_token(&state.db, token).await.unwrap();
-    let msg = format!("{} joined", user.username);
-    tracing::debug!("{msg}");
+    tracing::warn!("{} joined", user.username);
     // Send message to all users that a new user has joined
-    let _ = state.tx.send(ResponseMessage::Join {
+    let _ = state.broadcast_sender.send(ResponseMessage::Join {
         user_id: user.id,
         username: user.username.clone(),
     });
 
     let chat_id = ModelChat::get_id().unwrap();
-    ModelChatUser::new(&state.db, chat_id, user.id).await;
+    ModelChatUser::new(&state.db, chat_id, user.id)
+        .await
+        .unwrap();
     let connected_users = ModelUser::get_users_in_chat(&state.db, chat_id)
         .await
         .unwrap()
@@ -180,7 +186,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
         .await
         .unwrap();
 
-    sender
+    ws_sender
         .send(Message::Text(
             to_string(&ResponseMessage::History {
                 messages: chat_history,
@@ -191,10 +197,10 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
         .await
         .unwrap();
 
-    // Send message to all users in a chat
+    // Forward messages from broadcast(global) to client specific channel
     let mut send_task = tokio::spawn(async move {
-        while let msg = rx.recv().await {
-            if sender
+        while let msg = broadcast_receiver.recv().await {
+            if ws_sender
                 .send(Message::Text(to_string(&msg.unwrap()).unwrap()))
                 .await
                 .is_err()
@@ -204,17 +210,18 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
         }
     });
 
-    // Receive message from a user
-    let tx_clone = state.tx.clone();
+    // Receive message from a user and broadcast it to all users
+    let broadcast_sender_clone = state.broadcast_sender.clone();
     let db_clone = state.db.clone();
     let id = user.id;
     let username = user.username.clone();
     let mut recv_task = tokio::spawn(async move {
-        while let Some(Ok(Message::Text(text))) = receiver.next().await {
+        while let Some(Ok(Message::Text(text))) = ws_receiver.next().await {
             if let Ok(RequestMessage::Message { content }) = from_str(&text) {
-                let chat_id = ModelChat::get_id().unwrap();
-                ModelMessage::new(&db_clone, chat_id, id, content.clone()).await;
-                tx_clone
+                ModelMessage::new(&db_clone, chat_id, id, content.clone())
+                    .await
+                    .unwrap();
+                broadcast_sender_clone
                     .send(ResponseMessage::Message {
                         username: username.clone(),
                         content,
@@ -231,10 +238,12 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
         _ = (&mut recv_task) => send_task.abort(),
     };
 
-    // ModelUser::remove_user_from_chat(&state.db, user.id).await;
+    ModelUser::remove_user_from_chat(&state.db, user.id)
+        .await
+        .unwrap();
 
-    // tracing::debug!("{msg}");
-    let _ = state.tx.send(ResponseMessage::Leave {
+    tracing::warn!("left {}", user.username);
+    let _ = state.broadcast_sender.send(ResponseMessage::Leave {
         user_id: user.id,
         username: user.username.clone(),
     });
