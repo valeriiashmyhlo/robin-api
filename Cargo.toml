@@ -20,7 +20,7 @@ sqlx = { version = "0.7.3", features = [
 dotenv = "0.15.0"
 refinery = { version = "0.8.12", features = ["postgres"] }
 serde = { version = "1.0.196", features = ["derive"] }
-uuid = { version = "1.7.0", features = ["serde"] }
+uuid = { version = "1.7.0", features = ["serde", "v4"] }
 chrono = { version = "0.4.34", features = ["serde"] }
 anyhow = "1.0.79"
 cargo-watch = "8.5.2"
@@ -30,6 +30,10 @@ serde_json = "1.0.114"
 [[bin]]
 name = "migrate"
 path = "src/migrate.rs"
+
+[[bin]]
+name = "purge_db"
+path = "src/purge.rs"
 
 [[bin]]
 name = "app"

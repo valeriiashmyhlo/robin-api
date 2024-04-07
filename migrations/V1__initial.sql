@@ -1,6 +1,6 @@
 CREATE TABLE users (
-    id uuid PRIMARY KEY,
-    username varchar(255) not null,
-    token uuid not null,
-    password varchar(255) not null
+    id UUID PRIMARY KEY,
+    username VARCHAR(255) NOT NULL,
+    token UUID NOT NULL,
+    password VARCHAR(255) NOT NULL
 );

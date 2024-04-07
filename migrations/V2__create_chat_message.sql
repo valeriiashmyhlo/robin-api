@@ -1,10 +1,11 @@
 CREATE TABLE chats (
-    id uuid PRIMARY KEY
+    id UUID PRIMARY KEY
 );
 
 CREATE TABLE messages (
-    id uuid PRIMARY KEY,
-    user_id uuid not null,
-    chat_id uuid not null,
-    content text not null
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL,
+    chat_id UUID NOT NULL,
+    content TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

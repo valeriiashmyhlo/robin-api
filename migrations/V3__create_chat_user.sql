@@ -1,4 +1,4 @@
 CREATE TABLE chat_user (
-    chat_id uuid not null,
-    user_id uuid not null
+    chat_id UUID NOT NULL,
+    user_id UUID NOT NULL
 );
