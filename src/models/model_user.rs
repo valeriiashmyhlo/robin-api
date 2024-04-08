@@ -82,14 +82,6 @@ impl ModelUser {
         // Ok(vec![ModelUser::default()])
     }
 
-    pub async fn remove_user_from_chat(pool: &PgPool, user_id: Uuid) -> PostgresResult<()> {
-        sqlx::query!("DELETE FROM chat_user WHERE user_id = $1", user_id)
-            .execute(pool)
-            .await?;
-
-        Ok(())
-    }
-
     // pub async fn get_users_in_chat(pool: &PgPool, chat_id: Uuid) -> PostgresResult<Vec<ModelUser>> {
     //     Ok(sqlx::query_as!(
     //         ModelUser,

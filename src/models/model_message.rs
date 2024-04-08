@@ -49,7 +49,7 @@ impl Default for ModelMessage {
 }
 
 impl ModelMessage {
-    pub async fn new(
+    pub async fn create(
         pool: &PgPool,
         chat_id: Uuid,
         user_id: Uuid,

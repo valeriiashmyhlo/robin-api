@@ -11,6 +11,7 @@ use tower_http::cors::CorsLayer;
 use tracing::log::{set_max_level, LevelFilter};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
+use websocket::Controller;
 
 use crate::models::{HistoryMessage, ModelUser};
 
@@ -72,6 +73,7 @@ pub struct AppState {
     // user_set: Arc<Mutex<HashSet<User>>>,
     broadcast_sender: broadcast::Sender<ResponseMessage>,
     db: Pool<Postgres>,
+    controller: Controller,
 }
 
 #[tokio::main]
@@ -90,11 +92,12 @@ async fn main() {
 
     // let user_set = Arc::new(Mutex::new(HashSet::<User>::new()));
     let (broadcast_sender, _broadcast_receiver) = broadcast::channel(100);
-    let db = pool.clone();
+    // let db = pool.clone();
 
     let app_state = Arc::new(AppState {
-        broadcast_sender,
-        db,
+        broadcast_sender: broadcast_sender.clone(),
+        db: pool.clone(),
+        controller: Controller::new(pool.clone(), broadcast_sender.clone()),
     });
 
     let app = Router::new()
@@ -111,3 +114,5 @@ async fn main() {
 // 3. Refactor <-
 // 4. Remove unwrap()
 // 5. Add elasticsearch over messages
+// 6. Add Several chats for user
+// 7. Add tests

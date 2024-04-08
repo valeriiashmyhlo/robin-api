@@ -39,7 +39,7 @@ impl Default for ModelChatUser {
 }
 
 impl ModelChatUser {
-    pub async fn new(pool: &PgPool, chat_id: Uuid, user_id: Uuid) -> PostgresResult<Self> {
+    pub async fn create(pool: &PgPool, chat_id: Uuid, user_id: Uuid) -> PostgresResult<Self> {
         Ok(sqlx::query_as!(
             ModelChatUser,
             "INSERT INTO chat_user (chat_id, user_id) VALUES ($1, $2) RETURNING *",
@@ -50,5 +50,17 @@ impl ModelChatUser {
         .await?)
 
         // Ok(ModelChatUser::default())
+    }
+
+    pub async fn delete(pool: &PgPool, chat_id: Uuid, user_id: Uuid) -> PostgresResult<()> {
+        sqlx::query!(
+            "DELETE FROM chat_user WHERE chat_id = $1 AND user_id = $2",
+            chat_id,
+            user_id
+        )
+        .execute(pool)
+        .await?;
+
+        Ok(())
     }
 }
