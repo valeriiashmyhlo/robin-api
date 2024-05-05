@@ -70,7 +70,6 @@ enum ResponseMessage {
 }
 
 pub struct AppState {
-    // user_set: Arc<Mutex<HashSet<User>>>,
     broadcast_sender: broadcast::Sender<ResponseMessage>,
     db: Pool<Postgres>,
     controller: Controller,

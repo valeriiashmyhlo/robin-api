@@ -7,7 +7,8 @@ use axum::{
     response::IntoResponse,
 };
 use chrono::Utc;
-use futures::{sink::SinkExt, stream::StreamExt};
+use futures::stream::{SplitSink, SplitStream, StreamExt};
+use futures::SinkExt;
 use serde_json::{from_str, to_string};
 use sqlx::{Pool, Postgres};
 use std::sync::Arc;
@@ -26,15 +27,14 @@ async fn websocket(ws: WebSocket, state: Arc<AppState>) {
 
 async fn websocket_result(ws: WebSocket, state: Arc<AppState>) -> Result<(), AppError> {
     // Client specific channel
-    let (mut ws_sender, mut ws_receiver) = ws.split();
+    let (sender, receiver) = ws.split();
+    let mut client_receiver = ClientReceiver::new(receiver).await;
+    let mut client_sender = ClientSender::new(sender).await;
 
     // Broadcast channel
     let mut broadcast_receiver = state.broadcast_sender.subscribe();
 
-    let Some(Ok(Message::Text(text))) = ws_receiver.next().await else {
-        return Err(AppError::from(Error::msg("Invalid message")));
-    };
-    let RequestMessage::Join { token } = from_str(&text)? else {
+    let RequestMessage::Join { token } = client_receiver.next().await? else {
         return Err(AppError::from(Error::msg("Invalid message")));
     };
 
@@ -56,18 +56,18 @@ async fn websocket_result(ws: WebSocket, state: Arc<AppState>) -> Result<(), App
     // Send a history of a chat to a newly joined user
     let chat_history = ModelMessage::get_chat_history(&state.db, chat_id).await?;
 
-    ws_sender
-        .send(Message::Text(to_string(&ResponseMessage::History {
+    client_sender
+        .send(ResponseMessage::History {
             messages: chat_history,
             users: connected_users,
-        })?))
+        })
         .await?;
 
     // Forward messages from broadcast(global) to client specific channel
     let mut send_task: JoinHandle<Result<(), AppError>> = tokio::spawn(async move {
         loop {
             let msg = broadcast_receiver.recv().await?;
-            ws_sender.send(Message::Text(to_string(&msg)?)).await?;
+            client_sender.send(msg).await?;
         }
     });
 
@@ -76,17 +76,12 @@ async fn websocket_result(ws: WebSocket, state: Arc<AppState>) -> Result<(), App
     let user_id = user.id;
     let username = user.username.clone();
     let mut recv_task: JoinHandle<Result<(), AppError>> = tokio::spawn(async move {
-        while let Some(Ok(Message::Text(text))) = ws_receiver.next().await {
-            if let Ok(RequestMessage::Message { content }) = from_str(&text) {
-                state_clone
-                    .controller
-                    .send_message(chat_id, user_id, username.clone(), content.clone())
-                    .await?;
-            } else {
-                break;
-            }
+        while let RequestMessage::Message { content } = client_receiver.next().await? {
+            state_clone
+                .controller
+                .send_message(chat_id, user_id, username.clone(), content.clone())
+                .await?;
         }
-
         Ok(())
     });
 
@@ -111,6 +106,41 @@ pub async fn websocket_handler(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     ws.on_upgrade(|socket| websocket(socket, state))
+}
+
+struct ClientSender {
+    sender: SplitSink<WebSocket, Message>,
+}
+
+impl ClientSender {
+    async fn new(sender: SplitSink<WebSocket, Message>) -> Self {
+        Self { sender }
+    }
+
+    async fn send(&mut self, message: ResponseMessage) -> Result<(), AppError> {
+        self.sender
+            .send(Message::Text(to_string(&message)?))
+            .await?;
+        Ok(())
+    }
+}
+
+struct ClientReceiver {
+    receiver: SplitStream<WebSocket>,
+}
+
+impl ClientReceiver {
+    async fn new(receiver: SplitStream<WebSocket>) -> Self {
+        Self { receiver }
+    }
+
+    async fn next(&mut self) -> Result<RequestMessage, AppError> {
+        let receive_event = self.receiver.next().await;
+        match receive_event {
+            Some(Ok(Message::Text(text))) => Ok(from_str(&text)?),
+            _ => Err(AppError::from(Error::msg("Invalid message"))),
+        }
+    }
 }
 
 pub struct Controller {
