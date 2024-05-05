@@ -89,9 +89,7 @@ async fn main() {
         .with(tracing_subscriber::fmt::layer().compact().pretty())
         .init();
 
-    // let user_set = Arc::new(Mutex::new(HashSet::<User>::new()));
     let (broadcast_sender, _broadcast_receiver) = broadcast::channel(100);
-    // let db = pool.clone();
 
     let app_state = Arc::new(AppState {
         broadcast_sender: broadcast_sender.clone(),
@@ -110,8 +108,6 @@ async fn main() {
     serve(listener, app).await.unwrap();
 }
 
-// 3. Refactor <-
-// 4. Remove unwrap()
 // 5. Add elasticsearch over messages
 // 6. Add Several chats for user
 // 7. Add tests

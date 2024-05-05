@@ -190,5 +190,3 @@ impl Controller {
         Ok(())
     }
 }
-
-// 1. Wrapper for sender and receiver to use RequestMessage
