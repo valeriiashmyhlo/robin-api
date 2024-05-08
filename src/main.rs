@@ -111,3 +111,4 @@ async fn main() {
 // 5. Add elasticsearch over messages
 // 6. Add Several chats for user
 // 7. Add tests
+// 8. User creation

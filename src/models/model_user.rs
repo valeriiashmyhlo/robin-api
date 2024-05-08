@@ -32,7 +32,7 @@ impl Default for ModelUser {
 }
 
 impl ModelUser {
-    pub async fn get(pool: &PgPool, login: Login) -> PostgresResult<ModelUser> {
+    pub async fn get(pool: &PgPool, login: Login) -> Result<ModelUser, sqlx::Error> {
         let user = sqlx::query_as!(
             ModelUser,
             "SELECT * FROM users WHERE password = $1 AND username = $2",
@@ -41,8 +41,6 @@ impl ModelUser {
         )
         .fetch_one(pool)
         .await?;
-
-        // let user = ModelUser::default();
 
         Ok(user)
     }
