@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::login::Login;
 
-use super::PostgresResult;
+use super::{DatabaseResult, PostgresResult};
 
 #[derive(Debug, FromRow, Deserialize, Serialize, Eq, PartialEq, Clone)]
 #[allow(non_snake_case)]
@@ -32,7 +32,7 @@ impl Default for ModelUser {
 }
 
 impl ModelUser {
-    pub async fn get(pool: &PgPool, login: Login) -> Result<ModelUser, sqlx::Error> {
+    pub async fn get(pool: &PgPool, login: Login) -> DatabaseResult<ModelUser> {
         let user = sqlx::query_as!(
             ModelUser,
             "SELECT * FROM users WHERE password = $1 AND username = $2",
@@ -45,12 +45,10 @@ impl ModelUser {
         Ok(user)
     }
 
-    pub async fn get_by_token(pool: &PgPool, token: Uuid) -> PostgresResult<ModelUser> {
+    pub async fn get_by_token(pool: &PgPool, token: Uuid) -> DatabaseResult<ModelUser> {
         let user = sqlx::query_as!(ModelUser, "SELECT * FROM users WHERE token = $1", token,)
             .fetch_one(pool)
             .await?;
-
-        // let user = ModelUser::default();
 
         Ok(user)
     }
@@ -65,8 +63,8 @@ impl ModelUser {
         Ok(user)
     }
 
-    pub async fn get_users_in_chat(pool: &PgPool, chat_id: Uuid) -> PostgresResult<Vec<ModelUser>> {
-        Ok(sqlx::query_as!(
+    pub async fn get_users_in_chat(pool: &PgPool, chat_id: Uuid) -> DatabaseResult<Vec<ModelUser>> {
+        sqlx::query_as!(
             ModelUser,
             "SELECT users.* FROM users
                 JOIN chat_user AS cu
@@ -75,9 +73,7 @@ impl ModelUser {
             chat_id
         )
         .fetch_all(pool)
-        .await?)
-
-        // Ok(vec![ModelUser::default()])
+        .await
     }
 
     // pub async fn get_users_in_chat(pool: &PgPool, chat_id: Uuid) -> PostgresResult<Vec<ModelUser>> {

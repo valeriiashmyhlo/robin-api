@@ -4,7 +4,9 @@ use axum::{
         ws::{Message, WebSocket},
         State, WebSocketUpgrade,
     },
-    response::IntoResponse,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    Error as AxumError,
 };
 use chrono::Utc;
 use futures::stream::{SplitSink, SplitStream, StreamExt};
@@ -25,7 +27,21 @@ async fn websocket(ws: WebSocket, state: Arc<AppState>) {
     websocket_result(ws, state).await.unwrap()
 }
 
-async fn websocket_result(ws: WebSocket, state: Arc<AppState>) -> Result<(), AppError> {
+#[derive(thiserror::Error, Debug)]
+enum WebSocketError {
+    #[error(transparent)]
+    JoinError(#[from] ClientReceiverError),
+    #[error(transparent)]
+    UserError(#[from] sqlx::Error),
+    #[error(transparent)]
+    ChatError(#[from] crate::models::ChatError),
+    #[error(transparent)]
+    ControllerError(#[from] ControllerError),
+    #[error(transparent)]
+    SenderError(#[from] ClientSenderError),
+}
+
+async fn websocket_result(ws: WebSocket, state: Arc<AppState>) -> Result<(), WebSocketError> {
     // Client specific channel
     let (sender, receiver) = ws.split();
     let mut client_receiver = ClientReceiver::new(receiver).await;
@@ -35,7 +51,9 @@ async fn websocket_result(ws: WebSocket, state: Arc<AppState>) -> Result<(), App
     let mut broadcast_receiver = state.broadcast_sender.subscribe();
 
     let RequestMessage::Join { token } = client_receiver.next().await? else {
-        return Err(AppError::from(Error::msg("Invalid message")));
+        return Err(WebSocketError::JoinError(
+            ClientReceiverError::InvalidMessage,
+        ));
     };
 
     let user = ModelUser::get_by_token(&state.db, token).await?;
@@ -112,12 +130,30 @@ struct ClientSender {
     sender: SplitSink<WebSocket, Message>,
 }
 
+#[derive(thiserror::Error, Debug)]
+enum ClientSenderError {
+    #[error("SendError")]
+    SendError,
+}
+
+impl From<AxumError> for ClientSenderError {
+    fn from(e: AxumError) -> Self {
+        Self::SendError
+    }
+}
+
+impl From<serde_json::Error> for ClientSenderError {
+    fn from(e: serde_json::Error) -> Self {
+        Self::SendError
+    }
+}
+
 impl ClientSender {
     async fn new(sender: SplitSink<WebSocket, Message>) -> Self {
         Self { sender }
     }
 
-    async fn send(&mut self, message: ResponseMessage) -> Result<(), AppError> {
+    async fn send(&mut self, message: ResponseMessage) -> Result<(), ClientSenderError> {
         self.sender
             .send(Message::Text(to_string(&message)?))
             .await?;
@@ -129,16 +165,45 @@ struct ClientReceiver {
     receiver: SplitStream<WebSocket>,
 }
 
+#[derive(thiserror::Error, Debug)]
+enum ClientReceiverError {
+    #[error("ClientReceiverError: invalid message type")]
+    InvalidMessage,
+    #[error("ClientReceiverError: stream got closed unexpectedly")]
+    StreamClosed,
+    #[error("ClientReceiverError: receive error")]
+    ReceiveError,
+}
+
+impl From<AxumError> for ClientReceiverError {
+    fn from(e: AxumError) -> Self {
+        Self::ReceiveError
+    }
+}
+
+impl From<serde_json::Error> for ClientReceiverError {
+    fn from(e: serde_json::Error) -> Self {
+        Self::InvalidMessage
+    }
+}
+
 impl ClientReceiver {
     async fn new(receiver: SplitStream<WebSocket>) -> Self {
         Self { receiver }
     }
 
-    async fn next(&mut self) -> Result<RequestMessage, AppError> {
+    async fn next(&mut self) -> Result<RequestMessage, ClientReceiverError> {
         let receive_event = self.receiver.next().await;
+
         match receive_event {
+            // If text -> parse
             Some(Ok(Message::Text(text))) => Ok(from_str(&text)?),
-            _ => Err(AppError::from(Error::msg("Invalid message"))),
+            // If not text -> InvalidMessage
+            Some(Ok(_)) => Err(ClientReceiverError::InvalidMessage),
+            // If receive_event is Error -> ReceiveError
+            Some(Err(_)) => Err(ClientReceiverError::ReceiveError),
+            // If receive_event is None -> StreamClosed
+            None => Err(ClientReceiverError::StreamClosed),
         }
     }
 }
@@ -146,6 +211,17 @@ impl ClientReceiver {
 pub struct Controller {
     db: Pool<Postgres>,
     broadcast_sender: Sender<ResponseMessage>,
+}
+
+#[derive(thiserror::Error, Debug)]
+enum ControllerError {
+    // Chat error will become DatabaseError after implementing the chat creating logic
+    #[error(transparent)]
+    ChatError(#[from] crate::models::ChatError),
+    #[error(transparent)]
+    DatabaseError(#[from] sqlx::Error),
+    #[error(transparent)]
+    BroadcastError(#[from] tokio::sync::broadcast::error::SendError<ResponseMessage>),
 }
 
 impl Controller {
@@ -156,7 +232,7 @@ impl Controller {
         }
     }
 
-    async fn join_user(&self, chat_id: Uuid, user: User) -> Result<(), AppError> {
+    async fn join_user(&self, chat_id: Uuid, user: User) -> Result<(), ControllerError> {
         ModelChatUser::create(&self.db, chat_id, user.id).await?;
 
         // Send message to all users that a new user has joined
@@ -165,7 +241,7 @@ impl Controller {
         Ok(())
     }
 
-    async fn remove_user(&self, chat_id: Uuid, user: User) -> Result<(), AppError> {
+    async fn remove_user(&self, chat_id: Uuid, user: User) -> Result<(), ControllerError> {
         ModelChatUser::delete(&self.db, chat_id, user.id).await?;
         self.broadcast_sender
             .send(ResponseMessage::Leave { user })?;
@@ -179,7 +255,7 @@ impl Controller {
         id: Uuid,
         username: String,
         content: String,
-    ) -> Result<(), AppError> {
+    ) -> Result<(), ControllerError> {
         ModelMessage::create(&self.db, chat_id, id, content.clone(), Utc::now()).await?;
 
         self.broadcast_sender.send(ResponseMessage::Message {

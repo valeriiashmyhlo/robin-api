@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::PostgresResult;
+use super::DatabaseResult;
 
 /* History message structure of a Response event */
 // TODO: Doesn't belong to Model
@@ -55,9 +55,8 @@ impl ModelMessage {
         user_id: Uuid,
         content: String,
         created_at: DateTime<Utc>,
-    ) -> PostgresResult<ModelMessage> {
-        Ok(
-            sqlx::query_as!(
+    ) -> DatabaseResult<ModelMessage> {
+        sqlx::query_as!(
             ModelMessage,
             "INSERT INTO messages (id, chat_id, user_id, content, created_at) VALUES (gen_random_uuid(), $1, $2, $3, $4) RETURNING *",
             chat_id,
@@ -65,16 +64,14 @@ impl ModelMessage {
             content,
             created_at
         ).fetch_one(pool)
-        .await?)
-
-        // Ok(ModelMessage::default())
+        .await
     }
 
     pub async fn get_chat_history(
         pool: &PgPool,
         chat_id: Uuid,
-    ) -> PostgresResult<Vec<HistoryMessage>> {
-        Ok(sqlx::query_as!(
+    ) -> DatabaseResult<Vec<HistoryMessage>> {
+        sqlx::query_as!(
             HistoryMessage,
             "SELECT users.username, users.id as user_id, messages.content, messages.created_at FROM messages
             INNER JOIN users ON messages.user_id = users.id
@@ -82,8 +79,6 @@ impl ModelMessage {
             chat_id
         )
         .fetch_all(pool)
-        .await?)
-
-        // Ok(vec![HistoryMessage::default()])
+        .await
     }
 }
